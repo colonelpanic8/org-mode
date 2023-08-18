@@ -55,6 +55,7 @@
 (require 'org-macs)
 (require 'org-refile)
 (require 'org-element)
+(require 'transient)
 
 (declare-function diary-add-to-list "diary-lib"
                   (date string specifier &optional marker globcolor literal))
@@ -2887,9 +2888,95 @@ to limit entries to in this type."
 				(const search))
 			(integer :tag "Max number of minutes")))))
 
+(defvar org-agenda-builtin-key-to-action
+  '(("C" "Configure custom agenda commands."
+     (lambda (&optional arg)
+       (interactive)
+       (customize-variable 'org-agenda-custom-commands)))
+    ("a" "Display the agenda for current day or week."
+     (lambda (&optional arg)
+       (interactive)
+       (call-interactively 'org-agenda-list)))
+    ("s" "Search entries for keywords."
+     (lambda (&optional arg)
+       (interactive)
+       (call-interactively 'org-search-view)))
+    ("S" "Search entries for TODO keywords."
+     (lambda (&optional arg)
+       (interactive)
+       (org-call-with-arg 'org-search-view (or arg '(4)))))
+    ("t" "Display the global TODO list."
+     (lambda (&optional arg)
+       (interactive)
+       (call-interactively 'org-todo-list)))
+    ("T" "Display the global TODO list with specific keyword."
+     (lambda (&optional arg)
+       (interactive)
+       (org-call-with-arg 'org-todo-list (or arg '(4)))))
+    ("m" "Display headlines with tags matching a condition."
+     (lambda (&optional arg)
+       (interactive)
+       (call-interactively 'org-tags-view)))
+    ("M" "Display TODO headlines with tags matching a condition."
+     (lambda (&optional arg)
+       (interactive)
+       (org-call-with-arg 'org-tags-view (or arg '(4)))))
+    ("e" "Export views to associated files."
+     (lambda (&optional arg)
+       (interactive)
+       (call-interactively 'org-store-agenda-views)))
+    ("?" "List flagged tasks with description."
+     (lambda (&optional arg)
+       (interactive)
+       (org-tags-view nil "+FLAGGED")
+       (add-hook
+        'post-command-hook
+        (lambda ()
+          (unless (current-message)
+	    (let* ((m (org-agenda-get-any-marker))
+	           (note (and m (org-entry-get m "THEFLAGGINGNOTE"))))
+	      (when note
+	        (message "FLAGGING-NOTE ([?] for more info): %s"
+		         (org-add-props
+			     (replace-regexp-in-string
+			      "\\\\n" "//"
+			      (copy-sequence note))
+			     nil 'face 'org-warning))))))
+        t t)))
+    ("#" "List \"stuck\" projects."
+     (lambda (&optional arg)
+       (interactive)
+       (call-interactively 'org-agenda-list-stuck-projects)))
+    ("/" "Multi occur across all agenda files."
+     (lambda (&optional arg)
+       (interactive)
+       (call-interactively 'org-occur-in-agenda-files)))
+    ("!" "Configure what \"stuck\" means."
+     (lambda (&optional arg)
+       (interactive)
+       (customize-variable 'org-stuck-projects)))))
+
+(defun org-agenda-normalize-custom-agenda-commands (&optional custom-commands)
+  (unless custom-commands
+    (setq custom-commands org-agenda-custom-commands))
+  (let* ((prefix-descriptions nil))
+    (list
+     (org-contextualize-keys (delq nil
+	  (mapcar
+	   (lambda (x)
+	     (cond ((stringp (cdr x))
+		    (push x prefix-descriptions)
+		    nil)
+		   ((stringp (nth 1 x)) x)
+		   ((not (nth 1 x)) (cons (car x) (cons "" (cddr x))))
+		   (t (cons (car x) (cons "" (cdr x))))))
+	   org-agenda-custom-commands)) org-agenda-custom-commands-contexts)
+     prefix-descriptions)))
+
 (defvar org-agenda-keep-restricted-file-list nil)
 (defvar org-keys nil)
 (defvar org-match nil)
+(defvar lprops nil)
 ;;;###autoload
 (defun org-agenda (&optional arg keys restriction)
   "Dispatch agenda commands to collect entries to the agenda buffer.
@@ -2927,28 +3014,16 @@ Pressing `<' twice means to restrict to the current subtree or region
   (interactive "P")
   (catch 'exit
     (let* ((org-keys keys)
-	   (prefix-descriptions nil)
-	   (org-agenda-buffer-name org-agenda-buffer-name)
+p	   (org-agenda-buffer-name org-agenda-buffer-name)
 	   (org-agenda-window-setup (if (equal (buffer-name)
 					       org-agenda-buffer-name)
 					'current-window
 				      org-agenda-window-setup))
 	   (org-agenda-custom-commands-orig org-agenda-custom-commands)
-	   (org-agenda-custom-commands
-	    ;; normalize different versions
-	    (delq nil
-		  (mapcar
-		   (lambda (x)
-		     (cond ((stringp (cdr x))
-			    (push x prefix-descriptions)
-			    nil)
-			   ((stringp (nth 1 x)) x)
-			   ((not (nth 1 x)) (cons (car x) (cons "" (cddr x))))
-			   (t (cons (car x) (cons "" (cdr x))))))
-		   org-agenda-custom-commands)))
-	   (org-agenda-custom-commands
-	    (org-contextualize-keys
-	     org-agenda-custom-commands org-agenda-custom-commands-contexts))
+           (normalized-result (org-agenda-normalize-custom-agenda-commands
+                               org-agenda-custom-commands))
+	   (org-agenda-custom-commands (car normalized-result))
+           (prefix-descriptions (nth 1 normalized-result))
 	   ;; (buf (current-buffer))
 	   (bfn (buffer-file-name (buffer-base-buffer)))
 	   entry type org-match lprops ans) ;; key
@@ -2995,86 +3070,87 @@ Pressing `<' twice means to restrict to the current subtree or region
       ;; For example the todo list should not need it (but does...)
       (cond
        ((setq entry (assoc org-keys org-agenda-custom-commands))
-	(if (or (symbolp (nth 2 entry)) (functionp (nth 2 entry)))
-	    (progn
-	      ;; FIXME: Is (nth 3 entry) supposed to have access (via dynvars)
-              ;; to some of the local variables?  There's no doc about
-              ;; that for `org-agenda-custom-commands'.
-	      (setq type (nth 2 entry) org-match (eval (nth 3 entry) t)
-		    lprops (nth 4 entry))
-	      (when org-agenda-sticky
-		(setq org-agenda-buffer-name
-		      (or (and (stringp org-match) (format "*Org Agenda(%s:%s)*" org-keys org-match))
-			  (format "*Org Agenda(%s)*" org-keys))))
-	      (cl-progv
-	          (mapcar #'car lprops)
-	          (mapcar (lambda (binding) (eval (cadr binding) t)) lprops)
-	        (pcase type
-	          (`agenda
-	           (org-agenda-list arg))
-	          (`agenda*
-	           (org-agenda-list arg nil nil t))
-	          (`alltodo
-	           (org-todo-list arg))
-	          (`search
-	           (org-search-view arg org-match nil))
-	          (`stuck
-	           (org-agenda-list-stuck-projects arg))
-	          (`tags
-	           (org-tags-view arg org-match))
-	          (`tags-todo
-	           (org-tags-view '(4) org-match))
-	          (`todo
-		   (org-todo-list org-match))
-		  (`tags-tree
-		   (org-check-for-org-mode)
-		   (org-match-sparse-tree arg org-match))
-		  (`todo-tree
-		   (org-check-for-org-mode)
-		   (org-occur (concat "^" org-outline-regexp "[ \t]*"
-				      (regexp-quote org-match) "\\>")))
-		  (`occur-tree
-		   (org-check-for-org-mode)
-		   (org-occur org-match))
-		  ((pred functionp)
-		   (funcall type org-match))
-		  ;; FIXME: Will signal an error since it's not `functionp'!
-		  ((pred fboundp) (funcall type org-match))
-		  (_ (user-error "Invalid custom agenda command type %s" type))))
-              (let ((inhibit-read-only t))
-	        (add-text-properties (point-min) (point-max)
-			             `(org-lprops ,lprops))))
-	  (org-agenda-run-series (nth 1 entry) (cddr entry))))
+        (org-agenda-execute-custom-command entry arg))
        ((equal org-keys "C")
 	(setq org-agenda-custom-commands org-agenda-custom-commands-orig)
 	(customize-variable 'org-agenda-custom-commands))
-       ((equal org-keys "a") (call-interactively 'org-agenda-list))
-       ((equal org-keys "s") (call-interactively 'org-search-view))
-       ((equal org-keys "S") (org-call-with-arg 'org-search-view (or arg '(4))))
-       ((equal org-keys "t") (call-interactively 'org-todo-list))
-       ((equal org-keys "T") (org-call-with-arg 'org-todo-list (or arg '(4))))
-       ((equal org-keys "m") (call-interactively 'org-tags-view))
-       ((equal org-keys "M") (org-call-with-arg 'org-tags-view (or arg '(4))))
-       ((equal org-keys "e") (call-interactively 'org-store-agenda-views))
-       ((equal org-keys "?") (org-tags-view nil "+FLAGGED")
-	(add-hook
-	 'post-command-hook
-	 (lambda ()
-	   (unless (current-message)
-	     (let* ((m (org-agenda-get-any-marker))
-		    (note (and m (org-entry-get m "THEFLAGGINGNOTE"))))
-	       (when note
-		 (message "FLAGGING-NOTE ([?] for more info): %s"
-			  (org-add-props
-			      (replace-regexp-in-string
-			       "\\\\n" "//"
-			       (copy-sequence note))
-			      nil 'face 'org-warning))))))
-	 t t))
-       ((equal org-keys "#") (call-interactively 'org-agenda-list-stuck-projects))
-       ((equal org-keys "/") (call-interactively 'org-occur-in-agenda-files))
-       ((equal org-keys "!") (customize-variable 'org-stuck-projects))
+       ((setq entry (assoc org-keys org-agenda-builtin-key-to-action))
+        (funcall (nth 2 entry)))
        (t (user-error "Invalid agenda key"))))))
+
+(defun org-agenda-execute-custom-command (entry &optional arg)
+  (if (or (symbolp (nth 2 entry)) (functionp (nth 2 entry)))
+	  (progn
+	    (setq type (nth 2 entry) org-match (eval (nth 3 entry) t)
+              lprops (nth 4 entry))
+	(when org-agenda-sticky
+	  (setq org-agenda-buffer-name
+		(or (and (stringp org-match) (format "*Org Agenda(%s:%s)*" org-keys org-match))
+		    (format "*Org Agenda(%s)*" org-keys))))
+	(cl-progv
+	    (mapcar #'car lprops)
+	    (mapcar (lambda (binding) (eval (cadr binding) t)) lprops)
+	  (pcase type
+	    (`agenda (org-agenda-list arg))
+	    (`agenda* (org-agenda-list arg nil nil t))
+	    (`alltodo (org-todo-list arg))
+	    (`search (org-search-view arg org-match nil))
+	    (`stuck (org-agenda-list-stuck-projects arg))
+	    (`tags (org-tags-view arg org-match))
+	    (`tags-todo (org-tags-view '(4) org-match))
+	    (`todo (org-todo-list org-match))
+	    (`tags-tree
+	     (org-check-for-org-mode)
+	     (org-match-sparse-tree arg org-match))
+	    (`todo-tree
+	     (org-check-for-org-mode)
+	     (org-occur (concat "^" org-outline-regexp "[ \t]*"
+                                (regexp-quote org-match) "\\>")))
+	    (`occur-tree
+	     (org-check-for-org-mode)
+	     (org-occur org-match))
+	    ((pred functionp) (funcall type org-match))
+	    ((pred fboundp) (funcall type org-match))
+	    (_ (user-error "Invalid custom agenda command type %s" type))))
+	(let ((inhibit-read-only t))
+	  (add-text-properties (point-min) (point-max)
+                               `(org-lprops ,lprops))))
+    (org-agenda-run-series (nth 1 entry) (cddr entry))))
+
+(defun org-agenda-transient-get-custom-actions ()
+  (let ((normalized-commands (car (org-agenda-normalize-custom-agenda-commands))))
+    (cl-loop for custom-command in normalized-commands
+             collect (list (car custom-command) (nth 1 custom-command)
+                           `(lambda ()
+                              (interactive)
+                              (let ((command ',custom-command))
+                                (org-agenda-execute-custom-command command)))))))
+
+(transient-define-prefix org-agenda-transient ()
+  [:description
+   (lambda () "Org Agenda")
+   :setup-children org-agenda-transient--setup
+   :class transient-column
+   :pad-keys t])
+
+(defvar org-agenda-transient-taken-keys nil)
+
+(defun org-agenda-transient--setup (_)
+  (transient-parse-suffixes
+   'org-agenda-transient
+   (let ((org-agenda-transient-taken-keys nil))
+     (nconc
+      (org-agenda-transient-get-transient-triples
+       (org-agenda-transient-get-custom-actions))
+      (org-agenda-transient-get-transient-triples
+       org-agenda-builtin-key-to-action)))))
+
+(defun org-agenda-transient-get-transient-triples (triples)
+  (cl-loop for (key description fn) in triples
+            unless (member key org-agenda-transient-taken-keys)
+            collect
+            (progn (push key org-agenda-transient-taken-keys)
+                   (list (key-description key) description fn))))
 
 (defvar org-agenda-multi)
 
@@ -5044,6 +5120,7 @@ to search again: (0)[ALL]"))
 (defun org-tags-view (&optional todo-only match)
   "Show all headlines for all `org-agenda-files' matching a TAGS criterion.
 The prefix arg TODO-ONLY limits the search to TODO entries."
+
   (interactive "P")
   (when org-agenda-overriding-arguments
     (setq todo-only (car org-agenda-overriding-arguments)
