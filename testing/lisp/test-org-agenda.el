@@ -1134,6 +1134,154 @@ functions."
       (should (= arg-f-call-cnt 1))
       (should (equal f-called-args '(1 2 3))))))
 
+(ert-deftest test-org-agenda/builtin-keys-forward-prefix-arg ()
+  "Prefix arguments are forwarded unchanged for `S', `T', and `M'."
+  (dolist (key '("S" "T" "M"))
+    (let (captured-arg)
+      (cl-letf (((symbol-function 'org-call-with-arg)
+                 (lambda (_fn arg) (setq captured-arg arg)))
+                ((symbol-function 'org-contextualize-keys)
+                 (lambda (keys _contexts) keys)))
+        (let ((org-agenda-custom-commands nil)
+              (org-agenda-keep-restricted-file-list nil)
+              (org-agenda-overriding-restriction nil)
+              (org-agenda-sticky nil))
+          (org-agenda '(16) key)))
+      (should (equal '(16) captured-arg)))))
+
+(ert-deftest test-org-agenda/transient-require-is-optional ()
+  "The transient dependency should be required with NOERROR."
+  (let ((agenda-file (expand-file-name "lisp/org-agenda.el"
+                                       org-test-base-dir))
+        transient-form)
+    (with-temp-buffer
+      (insert-file-contents agenda-file)
+      (goto-char (point-min))
+      (while (and (not transient-form)
+                  (< (point) (point-max)))
+        (let ((form (ignore-errors (read (current-buffer)))))
+          (when (and (consp form)
+                     (eq (car form) 'require)
+                     (equal (nth 1 form) ''transient))
+            (setq transient-form form)))))
+    (should (equal '(require 'transient nil t) transient-form))))
+
+(ert-deftest test-org-agenda/execute-custom-command-does-not-leak-vars ()
+  "Executing a custom command should not create global `type' or `lprops'."
+  (let ((type-sym (intern "type"))
+        (lprops-sym (intern "lprops")))
+    (when (boundp type-sym) (makunbound type-sym))
+    (when (boundp lprops-sym) (makunbound lprops-sym))
+    (with-temp-buffer
+      (let ((org-agenda-sticky nil)
+            org-keys)
+        (org-agenda-execute-custom-command
+         '("x" "test" (lambda (_match) nil) nil nil))))
+    (should-not (boundp type-sym))
+    (should-not (boundp lprops-sym))))
+
+(ert-deftest test-org-agenda/normalize-custom-agenda-commands-honors-argument ()
+  "Normalization should use its CUSTOM-COMMANDS argument."
+  (cl-letf (((symbol-function 'org-contextualize-keys)
+             (lambda (keys _contexts) keys)))
+    (let* ((org-agenda-custom-commands '(("g" "global" alltodo)))
+           (custom-commands '(("a" "arg" todo)))
+           (normalized
+            (car (org-agenda-normalize-custom-agenda-commands
+                  custom-commands))))
+      (should (equal custom-commands normalized)))))
+
+(ert-deftest test-org-agenda/builtin-keys-default-to-control-u-prefix ()
+  "Keys `S', `T', and `M' should default to a C-u prefix when ARG is nil."
+  (dolist (key '("S" "T" "M"))
+    (let (captured-arg)
+      (cl-letf (((symbol-function 'org-call-with-arg)
+                 (lambda (_fn arg) (setq captured-arg arg)))
+                ((symbol-function 'org-contextualize-keys)
+                 (lambda (keys _contexts) keys)))
+        (let ((org-agenda-custom-commands nil)
+              (org-agenda-keep-restricted-file-list nil)
+              (org-agenda-overriding-restriction nil)
+              (org-agenda-sticky nil))
+          (org-agenda nil key)))
+      (should (equal '(4) captured-arg)))))
+
+(ert-deftest test-org-agenda/normalize-custom-agenda-commands-prefixes ()
+  "Prefix descriptions should come from CUSTOM-COMMANDS."
+  (cl-letf (((symbol-function 'org-contextualize-keys)
+             (lambda (keys _contexts) keys)))
+    (let* ((org-agenda-custom-commands
+            '(("g" . "Global prefix")
+              ("ga" "Global agenda" agenda)))
+           (custom-commands
+            '(("x" . "Custom prefix")
+              ("xa" "Custom agenda" agenda)))
+           (normalized-result
+            (org-agenda-normalize-custom-agenda-commands custom-commands))
+           (normalized (car normalized-result))
+           (prefixes (cadr normalized-result)))
+      (should (equal '(("xa" "Custom agenda" agenda)) normalized))
+      (should (equal '(("x" . "Custom prefix")) prefixes)))))
+
+(ert-deftest test-org-agenda/execute-custom-command-adds-lprops-property ()
+  "Custom command execution should preserve local properties on output."
+  (let ((lprops-sym (intern "lprops")))
+    (when (boundp lprops-sym) (makunbound lprops-sym))
+    (with-temp-buffer
+      (let ((org-agenda-sticky nil)
+            org-keys
+            (seen nil))
+        (org-agenda-execute-custom-command
+         `("x" "test"
+           ,(lambda (_match)
+              (setq seen (symbol-value 'org-test-agenda-prop))
+              (insert "x"))
+           nil
+           ((org-test-agenda-prop 42))))
+        (should (equal 42 seen))
+        (should (equal '((org-test-agenda-prop 42))
+                       (get-text-property (point-min) 'org-lprops)))))
+    (should-not (boundp lprops-sym))))
+
+(ert-deftest test-org-agenda/transient-triples-are-deduplicated ()
+  "Duplicate keys should only appear once in transient triples."
+  (let ((org-agenda-transient-taken-keys nil))
+    (should
+     (equal
+      '(("a" "first" ignore) ("b" "third" ignore))
+      (org-agenda-transient-get-transient-triples
+       '(("a" "first" ignore)
+         ("a" "second" ignore)
+         ("b" "third" ignore)))))))
+
+(ert-deftest test-org-agenda/transient-fallback-when-missing ()
+  "When transient is unavailable, `org-agenda-transient' should user-error."
+  (let* ((agenda-file (expand-file-name "lisp/org-agenda.el"
+                                        org-test-base-dir))
+         (original-transient-fn
+          (and (fboundp 'org-agenda-transient)
+               (symbol-function 'org-agenda-transient)))
+         (orig-require (symbol-function 'require))
+         (orig-featurep (symbol-function 'featurep)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'require)
+                     (lambda (feature &optional filename noerror)
+                       (if (eq feature 'transient)
+                           nil
+                         (funcall orig-require feature filename noerror))))
+                    ((symbol-function 'featurep)
+                     (lambda (feature &optional subfeature)
+                       (if (eq feature 'transient)
+                           nil
+                         (funcall orig-featurep feature subfeature)))))
+            (load agenda-file nil t))
+          (should-error (org-agenda-transient) :type 'user-error))
+      (if original-transient-fn
+          (fset 'org-agenda-transient original-transient-fn)
+        (when (fboundp 'org-agenda-transient)
+          (fmakunbound 'org-agenda-transient))))))
+
 
 
 (provide 'test-org-agenda)
