@@ -6395,12 +6395,13 @@ specification like [h]h:mm."
 		       (org-agenda--timestamp-to-absolute
 		        s base 'future (current-buffer) pos)))))
 	          (diff (- deadline current))
+                  (is-scheduled (org-element-property
+                                :raw-value
+                                (org-element-property :scheduled el)))
 	          (suppress-prewarning
 		   (let ((scheduled
 		          (and org-agenda-skip-deadline-prewarning-if-scheduled
-                               (org-element-property
-                                :raw-value
-                                (org-element-property :scheduled el)))))
+                               is-scheduled)))
 		     (cond
 		      ((not scheduled) nil)
 		      ;; The current item has a scheduled date, so
@@ -6416,11 +6417,17 @@ specification like [h]h:mm."
 			    org-deadline-warning-days))
 		      ;; Set pre-warning to deadline.
 		      (t 0))))
-	          (wdays (or suppress-prewarning (org-get-wdays s))))
+	          (wdays (or suppress-prewarning (org-get-wdays s)))
+                  (habitp (and (fboundp 'org-is-habit-p)
+                                   (string= "habit" (org-element-property :STYLE el)))))
 	     (cond
 	      ;; Only display deadlines at their base date, at future
 	      ;; repeat occurrences or in today agenda.
-	      ((= current deadline) nil)
+	      ((= current deadline)
+               (when (and org-agenda-skip-deadline-prewarning-if-scheduled
+                          habitp
+                          is-scheduled)
+                 (throw :skip nil)))
 	      ((= current repeat) nil)
 	      ((not today?) (throw :skip nil))
 	      ;; Upcoming deadline: display within warning period WDAYS.
@@ -6479,7 +6486,8 @@ specification like [h]h:mm."
 		      (face (org-agenda-deadline-face
 			     (- 1 (/ (float diff) (max wdays 1)))))
 		      (upcoming? (and today? (> deadline today)))
-		      (warntime (org-entry-get (point) "APPT_WARNTIME" 'selective)))
+		      (warntime (org-entry-get (point) "APPT_WARNTIME" 'selective))
+                      (habit-info (and habitp (org-habit-parse-todo (org-element-begin el)))))
 	         (org-add-props item props
 		   'org-marker (org-agenda-new-marker pos)
 		   'org-hd-marker (org-agenda-new-marker (line-beginning-position))
@@ -6500,7 +6508,9 @@ specification like [h]h:mm."
 		   'date (if upcoming? date deadline)
 		   'face (if done? 'org-agenda-done face)
 		   'undone-face face
-		   'done-face 'org-agenda-done)
+		   'done-face 'org-agenda-done
+                   'org-habit-p habit-info
+                   )
 	         (push item deadline-items)))))))
      :next-re regexp
      :fail-re regexp
@@ -6661,8 +6671,7 @@ scheduled items with an hour specification like [h]h:mm."
 	     ;; doesn't apply to habits.
 	     (when (pcase org-agenda-skip-scheduled-if-deadline-is-shown
 		     ((guard
-		       (or (not (memq (line-beginning-position 0) deadline-pos))
-			   habitp))
+		       (or (not (memq (line-beginning-position 0) deadline-pos))))
 		      nil)
 		     (`repeated-after-deadline
 		      (let ((deadline (time-to-days
