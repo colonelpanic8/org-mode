@@ -6512,7 +6512,13 @@ specification like [h]h:mm."
                  (throw :skip nil)))
 	      ((not today?) (throw :skip nil))
 	      ;; Upcoming deadline: display within warning period WDAYS.
-	      ((> deadline current) (when (> diff wdays) (throw :skip nil)))
+	      ((> deadline current)
+               (unless
+                   (and habitp
+		        (bound-and-true-p org-habit-show-all-today)
+                        (not (and org-agenda-skip-deadline-prewarning-if-scheduled
+                                  is-scheduled)))
+                 (when (> diff wdays) (throw :skip nil))))
 	      ;; Overdue deadline: warn about it for
 	      ;; `org-deadline-past-days' duration.
 	      (t (when (< org-deadline-past-days (- diff)) (throw :skip nil))))
