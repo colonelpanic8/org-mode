@@ -6151,6 +6151,10 @@ then those holidays will be skipped."
 	      (delq nil (mapcar (lambda(g) (member g skip-weeks)) h))))
      entry)))
 
+(defvar org-agenda-states-filter 'org-agenda-states-filter)
+(defun org-agenda-states-filter (state)
+  (member state org-done-keywords-for-agenda))
+
 (defalias 'org-get-closed #'org-agenda-get-progress)
 (defun org-agenda-get-progress ()
   "Return the logged TODO entries for agenda display."
@@ -6208,6 +6212,7 @@ then those holidays will be skipped."
 	  ;; substring should only run to end of time stamp
 	  (setq rest (substring timestr (match-end 0))
 		timestr (substring timestr 0 (match-end 0)))
+
 	  (if (and (not closedp) (not statep)
 		   (string-match "\\([0-9]\\{1,2\\}:[0-9]\\{2\\}\\)\\].*?\\([0-9]\\{1,2\\}:[0-9]\\{2\\}\\)"
 				 rest))
@@ -6264,7 +6269,11 @@ then those holidays will be skipped."
             'effort effort 'effort-minutes effort-minutes
 	    'type type 'date date
 	    'undone-face 'org-warning 'done-face 'org-agenda-done)
-	  (push txt ee))
+          (when (or
+                 (null statep)
+                 (null org-agenda-states-filter)
+                 (funcall org-agenda-states-filter state marker))
+            (push txt ee)))
         (goto-char (line-end-position))))
     (nreverse ee)))
 
