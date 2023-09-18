@@ -6511,11 +6511,12 @@ specification like [h]h:mm."
 	     (cond
 	      ;; Only display deadlines at their base date, at future
 	      ;; repeat occurrences or in today agenda.
-	      ((= current deadline)
-               (when (and org-agenda-skip-deadline-prewarning-if-scheduled
-                          habitp
-                          is-scheduled)
-                 (throw :skip nil)))
+	      ((and org-agenda-skip-deadline-prewarning-if-scheduled
+                    habitp
+                    is-scheduled)
+               (throw :skip nil))
+              ((= current deadline)
+               nil)
 	      ((= current repeat)
                (when (and (not (org-agenda-today-p date))
 		          (bound-and-true-p
