@@ -6421,7 +6421,6 @@ specification like [h]h:mm."
 	      ;; Only display deadlines at their base date, at future
 	      ;; repeat occurrences or in today agenda.
               ((and org-agenda-skip-deadline-prewarning-if-scheduled
-                    habitp
                     is-scheduled)
                (throw :skip nil))
 	      ((= current deadline) nil)
