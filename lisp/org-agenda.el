@@ -6416,7 +6416,11 @@ specification like [h]h:mm."
 	      ;; Only display deadlines at their base date, at future
 	      ;; repeat occurrences or in today agenda.
 	      ((= current deadline) nil)
-	      ((= current repeat) nil)
+	      ((= current repeat)
+               (when (and (not (org-agenda-today-p date))
+		          (bound-and-true-p
+		           org-habit-show-habits-only-for-today))
+                 (throw :skip nil)))
 	      ((not today?) (throw :skip nil))
 	      ;; Upcoming deadline: display within warning period WARNING-DAYS.
 	      ((> deadline current) (when (> diff warning-days) (throw :skip nil)))
