@@ -6360,6 +6360,9 @@ specification like [h]h:mm."
                          (1- (match-beginning 1))))
 	          (todo-state (org-element-property :todo-keyword el))
 	          (done? (eq 'done (org-element-property :todo-type el)))
+                  (is-scheduled (org-element-property
+                                :raw-value
+                                (org-element-property :scheduled el)))
                   (sexp? (eq 'diary
                              (org-element-property
                               :type (org-element-property :deadline el))))
@@ -6411,10 +6414,16 @@ specification like [h]h:mm."
 			    org-deadline-warning-days))
 		      ;; Set pre-warning to deadline.
 		      (t 0))))
-	          (warning-days (min max-warning-days (org-get-wdays s))))
+	          (warning-days (min max-warning-days (org-get-wdays s)))
+                  (habitp (and (fboundp 'org-is-habit-p)
+                               (string= "habit" (org-element-property :STYLE el)))))
 	     (cond
 	      ;; Only display deadlines at their base date, at future
 	      ;; repeat occurrences or in today agenda.
+              ((and org-agenda-skip-deadline-prewarning-if-scheduled
+                    habitp
+                    is-scheduled)
+               (throw :skip nil))
 	      ((= current deadline) nil)
 	      ((= current repeat) nil)
 	      ((not today?) (throw :skip nil))
